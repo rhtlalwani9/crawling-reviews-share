@@ -13,24 +13,18 @@ A browser clears the challenge once (~25 s); an impersonating HTTP client then d
 
 ## Quick start
 
-Requires **Python 3.11+** and **Google Chrome**.
+Requires **Python 3.11+** and **Google Chrome**. There is no install step — `PYTHONPATH=src` is the
+whole mechanism.
+
+### macOS / Linux
 
 ```bash
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 PYTHONPATH=src .venv/bin/python -m crawling_reviews.api      # → http://localhost:8080
-
-curl -sG "http://localhost:8080/reviews/aggregate" \
-  --data-urlencode "url=https://www.g2.com/products/asana/reviews" \
-  --data-urlencode "max_pages=3" | jq
 ```
 
-The first call takes 20–40 s while it mints a session; later calls reuse it (~1–2 s).
-
-<details>
-<summary>Windows, Docker, headless Linux</summary>
-
-**Windows (PowerShell)**
+### Windows (PowerShell)
 
 ```powershell
 py -3.11 -m venv .venv
@@ -39,24 +33,40 @@ $env:PYTHONPATH = "src"
 .venv\Scripts\python -m crawling_reviews.api
 ```
 
-**Docker** — portable, but see [Limitations](#limitations) on Apple Silicon.
+### Docker
+
+Portable, and the only option without Chrome installed. See [Limitations](#limitations) on Apple
+Silicon.
 
 ```bash
 docker compose --profile build build base   # OS, Chrome, fonts — slow, once
 docker compose up --build
 ```
 
-**Headless Linux server** — headless Chrome is detected by these targets, so use a virtual display:
+`make up`, `make test` and `make logs` wrap these on macOS/Linux; `make` is not required.
+
+### Headless Linux server
+
+Headless Chrome is detected by these targets, so run it against a virtual display:
 
 ```bash
 sudo apt-get install -y xvfb
 xvfb-run -a env PYTHONPATH=src .venv/bin/python -m crawling_reviews.api
 ```
 
-No install step: `PYTHONPATH=src` is the whole mechanism. Without Chrome installed, run
-`.venv/bin/patchright install chromium`. Port in use? Set `PORT`, or `HOST_PORT` for Docker.
-`make up`, `make test`, `make logs` wrap the Docker commands on macOS/Linux.
-</details>
+### First request
+
+```bash
+curl -sG "http://localhost:8080/reviews/aggregate" \
+  --data-urlencode "url=https://www.g2.com/products/asana/reviews" \
+  --data-urlencode "max_pages=3" | jq
+```
+
+The first call takes 20–40 s while it mints a browser session; later calls reuse it (~1–2 s).
+
+Without Google Chrome installed, run `.venv/bin/patchright install chromium` — it falls back to
+Chromium, which has a weaker fingerprint but works. Port already in use? Set `PORT`, or `HOST_PORT`
+for Docker.
 
 ---
 
