@@ -1,0 +1,151 @@
+# Two images, built in order. Compose will NOT build the base implicitly: the app image starts
+# `FROM review-crawler-base:1`, so that tag must exist first.
+#
+#   make up                 # builds base, then app, then runs  <- use this
+#
+# or explicitly:
+#   docker compose --profile build build base
+#   docker compose up --build
+#
+# ── WHY linux/amd64 IS PINNED ───────────────────────────────────────────────────────────────────
+# Google publishes no Chrome build for Linux/ARM (verified against the Chrome for Testing manifest:
+# `linux-arm64` does not exist for chrome). On an Apple Silicon host, a native arm64 build therefore
+# cannot install real Chrome and falls back to Playwright's Chromium — which works, but has a weaker
+# fingerprint (Chromium UA, no proprietary codecs).
+#
+# Pinning amd64 keeps the genuine Chrome fingerprint at the cost of emulation. To build natively
+# instead, remove `platform:` from both services and accept the Chromium fallback.
+
+services:
+  # Base image: browsers, fonts, Xvfb. Slow to build and rarely changes, so it is a separate image
+  # rather than a stage — application edits should not re-download two browsers.
+  #
+  # Behind a compose profile so `docker compose up` never tries to *run* it.
+  base:
+    profiles: ["build"]
+    image: review-crawler-base:1
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: base.Dockerfile
+      platforms:
+        - linux/amd64
+      args:
+        CHROME_MAJOR_PRIMARY: "151"
+        CHROME_MAJOR_SECONDARY: "150"
+        # Must match the ownership of any bind-mounted profile directory, or Chrome cannot take
+        # its SingletonLock. See docker/prepare-profile.sh.
+        APP_UID: "10001"
+        APP_GID: "10001"
+    command: ["true"]
+
+  crawler:
+    image: review-crawler:1
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+      args:
+        BASE_IMAGE: review-crawler-base:1
+    ports:
+      #
+      # HOST_PORT:CONTAINER_PORT. Only the left side is yours to change - it is resolved by Compose
+      # from your shell or a .env file, NOT from the `environment:` block below. The container side
+      # stays 8080 so it keeps matching EXPOSE and the healthcheck in Dockerfile.
+      #
+      #   HOST_PORT=9080 docker compose up        (or put HOST_PORT=9080 in .env)
+      - "${HOST_PORT:-8080}:8080"
+
+    # Values mirror .env.example. `${VAR:-default}` means a host env var or a .env file overrides
+    # them, but neither is required for the service to start.
+    environment:
+      # --- server -------------------------------------------------------------------------------
+      # Container-internal listen port. Deliberately fixed: Dockerfile's EXPOSE and HEALTHCHECK both
+      # reference 8080, so changing this here would break the healthcheck. To reach the service on a
+      # different port from your machine, set HOST_PORT above instead.
+      PORT: "8080"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+
+      # --- profile pool -------------------------------------------------------------------------
+      PROFILE_POOL_SIZE: "${PROFILE_POOL_SIZE:-2}"
+      PROFILE_BLOCK_WINDOW_S: "${PROFILE_BLOCK_WINDOW_S:-600}"    # sliding window for judging health
+      PROFILE_BLOCK_THRESHOLD: "${PROFILE_BLOCK_THRESHOLD:-3}"    # strikes in that window -> cooldown
+      PROFILE_COOLDOWN_S: "${PROFILE_COOLDOWN_S:-900}"            # rest duration
+      PROFILE_MAX_COOLDOWNS: "${PROFILE_MAX_COOLDOWNS:-3}"        # rests allowed before retirement
+      PROFILE_LEASE_TIMEOUT_S: "${PROFILE_LEASE_TIMEOUT_S:-300}"  # heartbeat silence -> lease reclaimed
+      PROFILE_REAPER_INTERVAL_S: "${PROFILE_REAPER_INTERVAL_S:-30}"
+      PROFILE_ACQUIRE_TIMEOUT_S: "${PROFILE_ACQUIRE_TIMEOUT_S:-60}"
+
+      # --- session ------------------------------------------------------------------------------
+      SESSION_TTL_S: "${SESSION_TTL_S:-900}"                # stay inside cf_clearance's lifetime
+      SESSION_MINT_SETTLE_S: "${SESSION_MINT_SETTLE_S:-6}"
+      # headless is detected on these targets, so the browser runs headful against Xvfb. Verified,
+      # not precautionary — the challenge does not clear headless.
+      BROWSER_HEADLESS: "${BROWSER_HEADLESS:-false}"
+      # Generous: an anti-bot JS challenge does real computation, and an emulated x86 container on an
+      # ARM host runs it several times slower than native. Raise further if mints time out.
+      SESSION_WAIT_TIMEOUT_S: "${SESSION_WAIT_TIMEOUT_S:-90}"
+      SESSION_CAPTURE_FAILURES: "${SESSION_CAPTURE_FAILURES:-true}"
+      # Pointer activity during the mint, plus interact-then-reload retries. A session with zero
+      # mouse events is a strong behavioural signal to anti-bot vendors.
+      SESSION_HUMANIZE: "${SESSION_HUMANIZE:-true}"
+      SESSION_CHALLENGE_ATTEMPTS: "${SESSION_CHALLENGE_ATTEMPTS:-3}"
+      # credentials and then fails. Dev-only, bound to localhost inside the container.
+
+      # Software GL backend, "swiftshader" or "mesa".
+      #
+      # swiftshader (default) is Chrome's bundled rasteriser. It works everywhere, but the renderer
+      # string names SwiftShader, which reads as containerised Chrome rather than as a machine without
+      # a GPU, and detection tools flag the renderer string.
+      #
+      # mesa asks for ANGLE over the system Mesa stack, which would report "ANGLE (Mesa, llvmpipe ...)"
+      # like any Linux box lacking GPU drivers. Measured on Apple Silicon under Rosetta: it yields no
+      # WebGL context at all, which is worse. Expected to work on a native x86_64 host — try it there
+      # and confirm with `make fingerprint` before relying on it.
+      CHROME_GL: "${CHROME_GL:-swiftshader}"
+
+      # --- egress coherence ---------------------------------------------------------------------
+      # Timezone and locale must agree with where the traffic appears to come from. Left unset these
+      # are auto-detected from the egress IP once per process, which is the right default because the
+      # exit can change (office, home, a rotating proxy). Set them explicitly behind a known proxy to
+      # skip the lookup.
+      # EGRESS_TIMEZONE: "Asia/Kolkata"
+      # EGRESS_LOCALE: "en-IN"
+
+      # --- fetch --------------------------------------------------------------------------------
+      FETCH_TIMEOUT_S: "${FETCH_TIMEOUT_S:-30}"
+      FETCH_MAX_RETRIES: "${FETCH_MAX_RETRIES:-3}"
+      FETCH_BACKOFF_BASE_S: "${FETCH_BACKOFF_BASE_S:-0.5}"
+      FETCH_BACKOFF_MAX_S: "${FETCH_BACKOFF_MAX_S:-8}"
+      FETCH_RATE_PER_SECOND: "${FETCH_RATE_PER_SECOND:-1}"  # politeness, per host
+      FETCH_BURST: "${FETCH_BURST:-2}"
+
+      # --- crawl --------------------------------------------------------------------------------
+      CRAWL_MAX_PAGES: "${CRAWL_MAX_PAGES:-2000}"
+      CRAWL_MAX_PROFILE_ATTEMPTS: "${CRAWL_MAX_PROFILE_ATTEMPTS:-2}"
+
+      # --- display ------------------------------------------------------------------------------
+      DISPLAY: ":99"                                        # provided by Xvfb in the entrypoint
+
+      # NOTE: proxy credentials are deliberately NOT here. A cookie jar is only valid through the
+      # exit that earned it, so egress belongs to the *signature* (profiles/signatures.py) rather
+      # than to global configuration.
+
+    volumes:
+      # One data root, shared with local runs. Safe because storage is scoped per platform:
+      #   _data/macOS/…   written by a local macOS run
+      #   _data/Linux/…   written by this container
+      # so neither can overwrite the other's identities, and both can be inspected in one place.
+      #
+      # Profiles stay outside the image deliberately: they are runtime state, they are large, and a
+      # stale SingletonLock baked into an image would stop Chrome starting. Mounting also lets a
+      # warmed profile survive rebuilds — which matters, because an aged profile clears challenges a
+      # fresh one cannot.
+      - ./src/crawling_reviews/profiles/_data:/app/src/crawling_reviews/profiles/_data
+
+    # Docker's default /dev/shm is 64MB and Chrome crashes on page load without more.
+    shm_size: "1gb"
+    init: true                  # reap zombie Chrome processes
+    restart: unless-stopped

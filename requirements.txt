@@ -1,0 +1,25 @@
+# Runtime dependencies. Versions are the ones this was built and tested against.
+#
+#   python3.11 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#   .venv/bin/patchright install chromium      # only if Google Chrome is not installed
+#
+# No `pip install -e .` and no packaging step: the app runs from source via PYTHONPATH=src.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+pydantic==2.13.4
+
+# Impersonating HTTP client (curl-impersonate bindings). This is the transport that gets past
+# TLS-fingerprint checks; a plain OpenSSL client cannot.
+curl_cffi==0.16.0
+
+# Patched Playwright: removes the CDP artefacts that give stock Playwright away.
+patchright==1.61.2
+
+# Parsing
+beautifulsoup4==4.15.0
+lxml==6.1.1
+
+# Used by the plain (non-impersonating) fetcher. h2 comes via the [http2] extra.
+httpx[http2]==0.28.1

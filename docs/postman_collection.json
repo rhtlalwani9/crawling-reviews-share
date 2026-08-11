@@ -1,0 +1,320 @@
+{
+  "info": {
+    "name": "Review Aggregation Crawler",
+    "description": "Import and run. Variables live at COLLECTION scope so they travel with this file \u2014 an environment would have to be exported and imported separately.\n\nEdit them in: right-click the collection \u2192 Edit \u2192 Variables.\n\nFirst call takes 20\u201340s (a browser session is minted). Later calls reuse it and return in ~1\u20132s; check `meta.session_minted` in the response.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string",
+      "description": "Change to http://localhost:9080 if you set HOST_PORT in .env"
+    },
+    {
+      "key": "targetUrl",
+      "value": "https://www.g2.com/products/asana/reviews?order=most_recent",
+      "type": "string",
+      "description": "Target profile URL, newest-first. The API normalises ordering itself, so order= is optional \u2014 but pass it explicitly to mirror what the site's own UI requests. A URL with several query parameters must be URL-encoded before being used as the `url` value, or its & separators are parsed as API parameters."
+    },
+    {
+      "key": "sourceName",
+      "value": "g2",
+      "type": "string",
+      "description": "Optional \u2014 inferred from the URL host when omitted"
+    },
+    {
+      "key": "maxPages",
+      "value": "3",
+      "type": "string",
+      "description": "Safety cap. Leave small: without it a full G2 crawl is ~1385 pages"
+    },
+    {
+      "key": "filterDate",
+      "value": "2026-08-05",
+      "type": "string",
+      "description": "Only reviews with review_date >= this"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Liveness plus the list of registered sources."
+      },
+      "response": []
+    },
+    {
+      "name": "Profile pool diagnostics",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/profiles",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "profiles"
+          ]
+        },
+        "description": "Pool state: each profile's state, health score, strikes in the sliding window, cooldown count, and any live sessions. Worth checking after a failure \u2014 health tracking records the block even when the crawl fails."
+      },
+      "response": []
+    },
+    {
+      "name": "Aggregate reviews (basic)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Contract checks, so a broken response is obvious without reading the body.",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('response_code is 200', () => pm.expect(body.response_code).to.eql(200));",
+              "pm.test('has reviews', () => pm.expect(body.aggregated_reviews.length).to.be.above(0));",
+              "pm.test('counts are consistent', () =>",
+              "  pm.expect(body.review_aggregated_count).to.eql(body.aggregated_reviews.length));",
+              "",
+              "pm.test('sorted newest first', () => {",
+              "  const dates = body.aggregated_reviews.map(r => r.review_date).filter(Boolean);",
+              "  const sorted = [...dates].sort().reverse();",
+              "  pm.expect(dates).to.eql(sorted);",
+              "});",
+              "",
+              "pm.test('every review is complete', () => {",
+              "  body.aggregated_reviews.forEach(r => {",
+              "    pm.expect(r.rating, 'rating').to.not.be.null;",
+              "    pm.expect(r.review_date, 'review_date').to.not.be.null;",
+              "    pm.expect(r.reviewer_name, 'reviewer_name').to.be.a('string').and.not.empty;",
+              "    pm.expect(r.comment, 'comment').to.be.a('string').and.not.empty;",
+              "  });",
+              "});",
+              "",
+              "console.log('meta:', JSON.stringify(body.meta));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/reviews/aggregate?url={{targetUrl}}&max_pages={{maxPages}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reviews",
+            "aggregate"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "{{targetUrl}}"
+            },
+            {
+              "key": "max_pages",
+              "value": "{{maxPages}}"
+            }
+          ]
+        },
+        "description": "The main endpoint. First run mints a browser session (20\u201340s); later runs reuse it. Postman URL-encodes the target URL automatically, so paste it raw into the variable."
+      },
+      "response": []
+    },
+    {
+      "name": "Aggregate with filter_date (early exit)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "const cutoff = pm.collectionVariables.get('filterDate');",
+              "",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('every review is on or after filter_date', () => {",
+              "  body.aggregated_reviews.forEach(r =>",
+              "    pm.expect(r.review_date >= cutoff, `${r.review_date} >= ${cutoff}`).to.be.true);",
+              "});",
+              "pm.test('stopped early rather than walking every page', () =>",
+              "  pm.expect(body.meta.stopped_early).to.be.true);",
+              "",
+              "// site total vs returned count must differ once a filter applies - conflating them",
+              "// would make a filtered response look like data loss",
+              "pm.test('site total exceeds returned count', () =>",
+              "  pm.expect(body.review_count).to.be.above(body.review_aggregated_count));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/reviews/aggregate?url={{targetUrl}}&filter_date={{filterDate}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reviews",
+            "aggregate"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "{{targetUrl}}"
+            },
+            {
+              "key": "filter_date",
+              "value": "{{filterDate}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Aggregate with explicit source_name",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/reviews/aggregate?url={{targetUrl}}&source_name={{sourceName}}&max_pages=1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reviews",
+            "aggregate"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "{{targetUrl}}"
+            },
+            {
+              "key": "source_name",
+              "value": "{{sourceName}}"
+            },
+            {
+              "key": "max_pages",
+              "value": "1"
+            }
+          ]
+        },
+        "description": "source_name is optional. When supplied it is cross-checked against the URL host, because running the wrong parser would return a confidently empty result instead of an error."
+      },
+      "response": []
+    },
+    {
+      "name": "Error \u2014 source_name contradicts the URL",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));",
+              "pm.test('typed error code', () =>",
+              "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_ERROR'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/reviews/aggregate?url={{targetUrl}}&source_name=zocdoc",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reviews",
+            "aggregate"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "{{targetUrl}}"
+            },
+            {
+              "key": "source_name",
+              "value": "zocdoc"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Error \u2014 invalid filter_date",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/reviews/aggregate?url={{targetUrl}}&filter_date=nope",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reviews",
+            "aggregate"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "{{targetUrl}}"
+            },
+            {
+              "key": "filter_date",
+              "value": "nope"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Error \u2014 unsupported source",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/reviews/aggregate?url=https://example.com/some/page",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reviews",
+            "aggregate"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "https://example.com/some/page"
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}

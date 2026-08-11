@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+# Runtime state: Chrome profiles, the pool registry, and the cached egress lookup.
+src/crawling_reviews/profiles/_data/

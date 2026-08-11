@@ -1,0 +1,21 @@
+# Force LF on everything that runs inside the Linux container.
+#
+# Without this, a Windows clone with core.autocrlf=true rewrites these to CRLF and the container
+# fails with `/usr/bin/env: 'bash\r': No such file or directory` — silent and confusing. Makefiles
+# are equally sensitive, since make is strict about tabs and line endings.
+* text=auto eol=lf
+
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+Makefile        text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.py            text eol=lf
+*.toml          text eol=lf
+
+# Fixtures are captured bytes: never let Git touch them, or the parser tests compare against
+# content that differs from what the site actually served.
+tests/fixtures/*.html   -text -diff
+*.png                   binary
+*.zip                   binary

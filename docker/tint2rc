@@ -1,0 +1,18 @@
+# Minimal panel. Reserves screen space so screen.availHeight is smaller than screen.height, as on
+# any real desktop.
+panel_monitor = all
+panel_position = bottom center horizontal
+panel_size = 100% 40
+panel_margin = 0 0
+panel_padding = 4 0 4
+panel_layer = bottom
+# The strut is the point: it tells the window manager to keep this strip out of the work area.
+panel_dock = 0
+strut_policy = follow_size
+panel_window_name = tint2
+disable_transparency = 1
+panel_items = TSC
+taskbar_mode = single_desktop
+task_maximum_size = 200 30
+clock_line_1 = %H:%M
+time1_font = sans 9

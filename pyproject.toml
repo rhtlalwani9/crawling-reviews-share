@@ -1,0 +1,13 @@
+# Metadata only. NOT required to run or test this project — see requirements.txt.
+# Deliberately no editable install: the app runs from source via PYTHONPATH=src, which avoids a
+# build step, an egg-info directory, and a class of "works on my machine" packaging problems.
+
+[project]
+name = "crawling-reviews"
+version = "1.0.0"
+description = "Review aggregation crawler with browser-profile pooling and impersonated HTTP transport"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
